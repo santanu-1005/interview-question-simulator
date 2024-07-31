@@ -128,5 +128,5 @@ def check_camera():
     # Placeholder function to simulate camera check
     return True
 
-# if __name__ == '__main__':
-#     app.run(debug=True)
+if __name__ == '__main__':
+    app.run(debug=True)
