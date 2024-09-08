@@ -3,90 +3,158 @@
 <head>
     <meta charset="UTF-8">
     <title>Virtual Interview</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        #question-container {
-            display: none;
-        }
-        #countdown {
-            font-size: 24px;
-            color: red;
-        }
+        #question-container { display: none; }
+        #countdown { font-size: 24px; color: red; }
+        .device-status { font-size: 16px; font-weight: bold; }
+        .device-status.success { color: green; }
+        .device-status.error { color: red; }
+        .loading-spinner { display: none; }
+        #video-container { display: none; }
+        #feedback-section { display: none; }
     </style>
 </head>
-<body>
+<body class="container my-5">
+    <!-- Your HTML content -->
     <div id="interview-container">
-        <p id="instructions">The interview will be conducted in English. You will have 10 seconds to answer each question. Your mic and camera will be turned on during the interview. If any of these devices are faulty or not working, you will be informed.</p>
-        <button id="start-interview-button">Start Interview</button>
-        <button id="check-devices-button">Check Devices</button>
+        <div class="alert alert-info" role="alert">
+            <p id="instructions">The interview will be conducted in English...</p>
+        </div>
+        <button id="check-devices-button" class="btn btn-primary">Check Devices</button>
+        <button id="start-button" class="btn btn-success" style="display:none;">Start Interview</button>
+        <div id="status" class="device-status mt-3"></div>
     </div>
-    <div id="question-container">
-        <p id="progress"></p>
-        <p id="question"></p>
-        <video id="video" width="640" height="480" autoplay></video>
-        <p id="countdown"></p>
-        <button id="submit-button" style="display:none;">Submit Interview</button>
+    <div id="question-container" class="mt-5">
+        <div class="progress">
+            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+        <div class="card mt-3">
+            <div class="card-body">
+                <h5 id="question" class="card-title"></h5>
+                <div id="video-container">
+                    <video id="video" width="640" height="480" autoplay class="d-block mx-auto my-3"></video>
+                </div>
+                <p id="countdown" class="text-center"></p>
+                <button id="retry-button" class="btn btn-warning" style="display:none;">Retry</button>
+                <button id="next-button" class="btn btn-primary" style="display:none;">Next Question</button>
+                <button id="submit-button" class="btn btn-success" style="display:none;">Submit Interview</button>
+            </div>
+        </div>
     </div>
-    <p id="status" style="color:red;"></p>
+    <div id="feedback-section" class="mt-5">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Interview Feedback</h5>
+                <textarea id="feedback" class="form-control" rows="4" placeholder="Please provide your feedback here..."></textarea>
+                <button id="submit-feedback-button" class="btn btn-primary mt-3">Submit Feedback</button>
+                <div id="feedback-response" class="mt-3"></div>
+            </div>
+        </div>
+    </div>
+    <div class="loading-spinner text-center">
+        <div class="spinner-border" role="status">
+            <span class="sr-only">Loading...</span>
+        </div>
+    </div>
 
     <script>
-        document.getElementById('check-devices-button').onclick = async function() {
+        let questions = [];
+        let recordings = [];
+        let mediaRecorder;
+        let currentStream;
+        let chunks = [];
+        let questionIndex = 0;
+        let tabSwitchCount = 0; // Variable to count tab switches
+
+        document.getElementById('check-devices-button').onclick = async function () {
             const statusElem = document.getElementById('status');
-            statusElem.textContent = 'Checking devices...';
+            statusElem.textContent = "Checking devices...";
+            statusElem.classList.remove('success', 'error');
+            document.querySelector('.loading-spinner').style.display = 'block';
 
             try {
-                const response = await fetch('/check-devices', { method: 'POST' });
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.status === 'success') {
-                        statusElem.textContent = "All devices are working.";
-                    } else {
-                        if (!result.mic) statusElem.textContent = "Microphone is not working. Please fix it or try another device.";
-                        if (!result.camera) statusElem.textContent = "Camera is not working. Please fix it or try another device.";
-                    }
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                let micWorking = false;
+                let cameraWorking = false;
+
+                devices.forEach(device => {
+                    if (device.kind === 'audioinput') micWorking = true;
+                    if (device.kind === 'videoinput') cameraWorking = true;
+                });
+
+                document.querySelector('.loading-spinner').style.display = 'none';
+                if (micWorking && cameraWorking) {
+                    statusElem.textContent = "All devices are working properly.";
+                    statusElem.classList.add('success');
+                    document.getElementById('start-button').style.display = 'block';
                 } else {
-                    statusElem.textContent = "An error occurred while checking devices.";
+                    statusElem.textContent = "";
+                    if (!micWorking) statusElem.textContent += "Microphone is not working. ";
+                    if (!cameraWorking) statusElem.textContent += "Camera is not working.";
+                    statusElem.classList.add('error');
                 }
             } catch (error) {
                 console.error('Error checking devices:', error);
-                statusElem.textContent = "An error occurred while checking devices.";
+                document.querySelector('.loading-spinner').style.display = 'none';
+                statusElem.textContent = "There was an error checking your devices.";
+                statusElem.classList.add('error');
             }
         };
 
-        document.getElementById('start-interview-button').onclick = async function() {
-            try {
-                await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('start-button').onclick = async function () {
+            startInterview();
+        };
 
-                const response = await fetch('/conduct-interview', { method: 'POST' });
-                const result = await response.json();
-                const questions = result.questions;
+        async function startInterview() {
+            const response = await fetch('/conduct-interview', { method: 'POST' });
+            const result = await response.json();
+            questions = result.questions;
 
-                document.getElementById('interview-container').style.display = 'none';
-                document.getElementById('question-container').style.display = 'block';
+            document.getElementById('interview-container').style.display = 'none';
+            document.getElementById('question-container').style.display = 'block';
 
-                let questionIndex = 0;
+            askNextQuestion();
+        }
 
-                function askNextQuestion() {
-                    if (questionIndex < questions.length) {
-                        document.getElementById('question').textContent = questions[questionIndex];
-                        document.getElementById('progress').textContent = `Question ${questionIndex + 1} of ${questions.length}`;
-                        recordAnswer(questionIndex, () => {
-                            questionIndex++;
-                            if (questionIndex < questions.length) {
-                                askNextQuestion();
-                            } else {
-                                endInterview();
-                            }
-                        });
-                    } else {
-                        endInterview();
-                    }
-                }
+        function askNextQuestion() {
+            if (questionIndex < questions.length) {
+                document.getElementById('question').textContent = questions[questionIndex];
+                document.getElementById('progress-bar').style.width = `${((questionIndex + 1) / questions.length) * 100}%`;
+                document.getElementById('progress-bar').setAttribute('aria-valuenow', `${((questionIndex + 1) / questions.length) * 100}`);
+                document.getElementById('next-button').style.display = 'none';
+                document.getElementById('retry-button').style.display = 'none';
+                document.getElementById('submit-button').style.display = 'none';
 
-                askNextQuestion();
-            } catch (error) {
-                console.error('Error starting interview:', error);
-                document.getElementById('status').textContent = "An error occurred while starting the interview.";
+                startPreparation(5, () => {
+                    recordAnswer(questionIndex, () => {
+                        if (questionIndex < questions.length - 1) {
+                            document.getElementById('next-button').style.display = 'block';
+                        } else {
+                            document.getElementById('submit-button').style.display = 'block';
+                        }
+                        document.getElementById('retry-button').style.display = 'block';
+                    });
+                });
+            } else {
+                endInterview();
             }
+        }
+
+        function startPreparation(seconds, callback) {
+            const countdownElem = document.getElementById('countdown');
+            document.getElementById('video-container').style.display = 'none';
+            let remainingTime = seconds;
+            countdownElem.textContent = `Prepare your answer. Time left: ${remainingTime}s`;
+            const interval = setInterval(() => {
+                remainingTime--;
+                countdownElem.textContent = `Prepare your answer. Time left: ${remainingTime}s`;
+                if (remainingTime <= 0) {
+                    clearInterval(interval);
+                    document.getElementById('video-container').style.display = 'block';
+                    callback();
+                }
+            }, 1000);
         }
 
         function startCountdown(seconds, callback) {
@@ -105,59 +173,99 @@
 
         function recordAnswer(index, callback) {
             const videoElem = document.getElementById('video');
-            navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+            navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+                audio: true
+            }).then(stream => {
                 videoElem.srcObject = stream;
-                const mediaRecorder = new MediaRecorder(stream);
-                const chunks = [];
+                currentStream = stream;
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
+                chunks = [];
 
-                mediaRecorder.ondataavailable = function(event) {
+                mediaRecorder.ondataavailable = function (event) {
                     chunks.push(event.data);
                 };
 
-                mediaRecorder.onstop = function() {
-                    const blob = new Blob(chunks, { 'type': 'video/mp4;' });
+                mediaRecorder.onstop = function () {
+                    const blob = new Blob(chunks, { 'type': 'video/webm;' });
+                    const url = URL.createObjectURL(blob);
+                    recordings[questionIndex] = { blob, url };
+
                     const formData = new FormData();
-                    formData.append('video', blob, `question_${index}.mp4`);
+                    formData.append('video', blob, `question_${index}.webm`);
+                    formData.append('question_index', index);
 
                     fetch('/save-video', { method: 'POST', body: formData });
                 };
 
-                // Start recording
-                mediaRecorder.start();
-
-                // Start countdown for 45 seconds
-                startCountdown(45, () => {
-                    // Stop the recording after the countdown completes
-                    if (mediaRecorder.state !== 'inactive') {
-                        mediaRecorder.stop();
-                        stream.getTracks().forEach(track => track.stop());
-                        // Wait for an additional 10 seconds before proceeding
-                        setTimeout(callback, 10000);
-                    }
+                startCountdown(5, () => {
+                    mediaRecorder.stop();
+                    stream.getTracks().forEach(track => track.stop());
+                    callback();
                 });
+
+                mediaRecorder.start();
             }).catch(error => {
-                console.error('Error accessing media devices:', error);
-                document.getElementById('status').textContent = "An error occurred while accessing media devices.";
+                console.error('Error accessing media devices.', error);
             });
         }
 
+        document.getElementById('retry-button').onclick = function () {
+            chunks = [];
+            mediaRecorder.stop();
+            currentStream.getTracks().forEach(track => track.stop());
+            askNextQuestion();
+        };
+
+        document.getElementById('next-button').onclick = function () {
+            questionIndex++;
+            askNextQuestion();
+        };
+
+        document.getElementById('submit-button').onclick = function () {
+            endInterview();
+        };
+
         function endInterview() {
-            document.getElementById('question-container').innerHTML = "<p>You will be contacted by the HR team if selected for this internship. You can now submit your interview recordings.</p>";
-            document.getElementById('submit-button').style.display = 'block';
+            document.getElementById('question-container').innerHTML = `
+                <div class="card mt-3">
+                    <div class="card-body">
+                        <h5 class="card-title">Review Your Answers</h5>
+                        ${recordings.map((recording, index) => `
+                            <div class="mt-3">
+                                <h6>Question ${index + 1}</h6>
+                                <video controls width="100%" src="${recording.url}"></video>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <button id="end-interview-button" class="btn btn-primary mt-3">End Interview</button>
+            `;
+            document.getElementById('feedback-section').style.display = 'block';
 
-            document.getElementById('submit-button').onclick = async function() {
-                const videoElem = document.getElementById('video');
-                const stream = videoElem.srcObject;
-                if (stream) {
-                    const tracks = stream.getTracks();
-                    tracks.forEach(track => track.stop()); // Stop all tracks
-                }
+            document.getElementById('end-interview-button').onclick = function () {
+                window.location.reload();
+            };
 
-                // Handle any additional final submission logic here
-                alert('Interview submitted. Thank you!');
-                window.location.reload(); // Reload the page to restart the interview process
+            document.getElementById('submit-feedback-button').onclick = function () {
+                const feedback = document.getElementById('feedback').value;
+                alert('Feedback submitted: ' + feedback);
+                window.location.reload();
             };
         }
+
+        // Track tab visibility changes
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden') {
+                tabSwitchCount++;
+                if (tabSwitchCount > 2) {
+                    alert('You have switched tabs multiple times. The page will reload.');
+                    window.location.reload();
+                } else {
+                    alert('You have switched tabs ' + tabSwitchCount + ' times.');
+                }
+            }
+        });
     </script>
 </body>
 </html>
